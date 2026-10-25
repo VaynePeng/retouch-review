@@ -7,7 +7,7 @@ const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors
 await page.goto('http://127.0.0.1:5178');await page.waitForSelector('.empty-panel');
 await page.screenshot({path:'artifacts/empty-desktop.png'});
 // Deterministic raster fixtures exercise coordinates; these are not user photo acceptance.
-const fixture=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=1200;c.height=1600;const x=c.getContext('2d');x.fillStyle='#b4ad9a';x.fillRect(0,0,1200,1600);x.fillStyle='#697864';x.fillRect(0,1100,1200,500);x.fillStyle='#ddd0b4';x.beginPath();x.ellipse(600,650,260,360,0,0,Math.PI*2);x.fill();x.fillStyle='#343d30';x.beginPath();x.ellipse(600,405,270,170,0,0,Math.PI*2);x.fill();x.fillStyle='#71634f';x.fillRect(480,640,45,15);x.fillRect(675,640,45,15);x.fillRect(555,850,90,15);x.fillStyle='#e9dfca';x.beginPath();x.moveTo(400,1000);x.lineTo(800,1000);x.lineTo(950,1600);x.lineTo(250,1600);x.fill();const a=c.toDataURL('image/png');x.fillStyle='#e3d8c0';x.beginPath();x.ellipse(600,700,180,100,0,0,Math.PI*2);x.fill();return [a,c.toDataURL('image/png')];});
+const fixture=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=1200;c.height=1600;const x=c.getContext('2d');x.fillStyle='#b4ad9a';x.fillRect(0,0,1200,1600);x.fillStyle='#697864';x.fillRect(0,1100,1200,500);x.fillStyle='#ddd0b4';x.beginPath();x.ellipse(600,650,260,360,0,0,Math.PI*2);x.fill();x.fillStyle='#343d30';x.beginPath();x.ellipse(600,405,270,170,0,0,Math.PI*2);x.fill();x.fillStyle='#71634f';x.fillRect(480,640,45,15);x.fillRect(675,640,45,15);x.fillRect(555,850,90,15);x.fillStyle='#e9dfca';x.beginPath();x.moveTo(400,1000);x.lineTo(800,1000);x.lineTo(950,1600);x.lineTo(250,1600);x.fill();const a=c.toDataURL('image/png');x.fillStyle='#e3d8c0';x.beginPath();x.ellipse(600,700,180,100,0,0,Math.PI*2);x.fill();const cropped=document.createElement('canvas');cropped.width=1200;cropped.height=1450;cropped.getContext('2d').drawImage(c,0,-75);return [a,cropped.toDataURL('image/png')];});
 const buffer=s=>Buffer.from(s.split(',')[1],'base64');
 await page.locator('#file-input').setInputFiles({name:'portrait.png',mimeType:'image/png',buffer:buffer(fixture[0])});
 await page.waitForFunction(()=>document.getElementById('pair-count').textContent==='1');
@@ -60,6 +60,28 @@ assert.ok(pinched['original-canvas'].count-panned['original-canvas'].count<=2,'w
 assert.equal(await page.evaluate(()=>window.canvasResizes),resizeBefore,'zoom must not reallocate the canvas');
 assert.equal(await page.locator('#original-scale').textContent(),await page.locator('#retouch-scale').textContent());
 await page.click('[data-action="fit"]');
+// Re-link independently positioned/scaled views without changing either canvas.
+await page.click('[data-action="sync"]');
+await page.locator('#retouch-canvas').evaluate(c=>{const r=c.getBoundingClientRect();c.dispatchEvent(new WheelEvent('wheel',{deltaX:43,deltaY:71,bubbles:true,cancelable:true}));c.dispatchEvent(new WheelEvent('wheel',{deltaY:-35,ctrlKey:true,clientX:r.left+r.width*.35,clientY:r.top+r.height*.4,bubbles:true,cancelable:true}));});
+await page.waitForTimeout(100);
+const independent=await page.evaluate(()=>structuredClone(window.gesturePaints));
+await page.click('[data-action="sync"]');await page.waitForTimeout(100);
+const relinked=await page.evaluate(()=>structuredClone(window.gesturePaints));
+for(const id of ['original-canvas','retouch-canvas'])for(const key of ['a','d','e','f'])assert.equal(relinked[id][key],independent[id][key],'relink must preserve both views');
+const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-4,`${a} != ${b}`);
+const fitScales=await page.evaluate(()=>['original','retouch'].map(side=>{const r=document.getElementById(`${side}-canvas`).getBoundingClientRect();return Math.min(r.width,r.height/(1600/1200))*.9;}));
+for(const side of ['original','retouch']){
+  const before=await page.evaluate(()=>structuredClone(window.gesturePaints));
+  await page.locator(`#${side}-canvas`).hover();await page.mouse.wheel(27,39);await page.waitForTimeout(100);
+  const after=await page.evaluate(()=>structuredClone(window.gesturePaints));
+  near((after['original-canvas'].e-before['original-canvas'].e)/fitScales[0],(after['retouch-canvas'].e-before['retouch-canvas'].e)/fitScales[1]);
+  near((after['original-canvas'].f-before['original-canvas'].f)/fitScales[0],(after['retouch-canvas'].f-before['retouch-canvas'].f)/fitScales[1]);
+  await page.locator(`#${side}-canvas`).evaluate(c=>{const r=c.getBoundingClientRect();c.dispatchEvent(new WheelEvent('wheel',{deltaY:-20,ctrlKey:true,clientX:r.left+r.width*.3,clientY:r.top+r.height*.4,bubbles:true,cancelable:true}));});
+  await page.waitForTimeout(100);
+  const zoomed=await page.evaluate(()=>structuredClone(window.gesturePaints));
+  near(zoomed['original-canvas'].a/zoomed['retouch-canvas'].a,independent['original-canvas'].a/independent['retouch-canvas'].a);
+}
+await page.click('[data-action="fit"]');
 const bounds=await page.locator('.compare').boundingBox();assert.ok(bounds.height>=780,`comparison height ${bounds.height}`);assert.ok(bounds.width>=1400);
 await page.screenshot({path:'artifacts/workspace-desktop.png'});
 await page.click('[data-action="toggle-sidebar"]');await page.screenshot({path:'artifacts/workspace-notes.png'});await page.click('[data-action="toggle-sidebar"]');
@@ -77,7 +99,8 @@ await page.click('[data-action="replay"]');await page.click('#start-tour');await
 await page.click('[data-action="record"]');await page.locator('#retouch-canvas').hover();await page.mouse.wheel(0,-180);await page.click('[data-action="marks"]');await page.click('[data-action="record"]');await page.click('[data-action="finish-record"]');
 await page.waitForFunction(()=>document.getElementById('saved').textContent==='已保存到本机' && document.getElementById('replay-summary').textContent.includes('1 段录制'));await page.reload();await page.waitForFunction(()=>document.getElementById('note-count').textContent==='1');assert.match(await page.locator('#replay-summary').textContent(),/1 段录制/);
 await page.click('[data-action="export"]');
-for(const [kind,file] of [['png','feedback.png'],['pdf','feedback.pdf'],['html','replay.html'],['package','project.retouch']]){const downloadPromise=page.waitForEvent('download');await page.click(`[data-export="${kind}"]`);const download=await downloadPromise;await download.saveAs(`artifacts/${file}`);assert.ok((await fs.stat(`artifacts/${file}`)).size>1000);}
+await page.selectOption('#export-scope','annotated');
+for(const [kind,file] of [['png','feedback.png'],['pdf','feedback.pdf'],['html','replay.html'],['package','project.retouch']]){const started=Date.now();const downloadPromise=page.waitForEvent('download');await page.click(`[data-export="${kind}"]`);const download=await downloadPromise;await download.saveAs(`artifacts/${file}`);assert.ok((await fs.stat(`artifacts/${file}`)).size>1000);assert.match(await page.locator('#export-status').textContent(),/已生成/);console.log(`${kind}: ${Date.now()-started} ms`);}
 await page.click('[data-action="close-dialog"]');
 const offline=await context.newPage();offline.on('pageerror',e=>errors.push(String(e)));await context.setOffline(true);await offline.goto('file://'+process.cwd()+'/artifacts/replay.html');await offline.click('#next');assert.match(await offline.locator('#caption').textContent(),/皮肤纹理/);await offline.screenshot({path:'artifacts/offline-replay.png'});await context.setOffline(false);
 await page.locator('#package-input').setInputFiles('artifacts/project.retouch');await page.waitForFunction(()=>document.querySelector('.project-name').textContent.endsWith('· 导入'));assert.equal(await page.locator('#note-count').textContent(),'1');

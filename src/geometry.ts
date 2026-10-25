@@ -35,3 +35,9 @@ export function focusPoints(points: Point[], aspect: number): Camera {
   return {x:(Math.max(...xs)+Math.min(...xs))/2,y:(Math.max(...ys)+Math.min(...ys))/2,zoom:clamp(Math.min(.65/Math.max(width,.13),aspect*.65/Math.max(height,.13)),1,6)};
 }
 export function filenameKey(name: string): string { return name.replace(/\.[^.]+$/,'').replace(/[-_ ]?(edited|edit|retouched|retouch|final|修图|精修|原图|v\d+)$/i,'').toLowerCase(); }
+
+// Preserve the relative position and scale established by the two current views.
+export function linkedCamera(previous:Camera,next:Camera,other:Camera):Camera {
+  const ratio=previous.zoom/other.zoom;
+  return {x:other.x+(next.x-previous.x)*ratio,y:other.y+(next.y-previous.y)*ratio,zoom:other.zoom*next.zoom/previous.zoom};
+}

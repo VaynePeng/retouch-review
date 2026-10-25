@@ -1,8 +1,9 @@
+import { exportPairs } from './export-selection';
 import { hitAnnotation } from './hit-test';
 import { bindViewportGestures, type InputMode } from './gestures';
 import './style.css';
 import { type Project,type Pair,type Version,type Asset,type Region,type Annotation,type Scene,type Side,type Tool,type Camera,type Recording,uid,identity,newProject } from './model';
-import { clamp,fitScale,screenToWorld,fromWorld,focusPoints,regionWorldPoints,zoomAt,filenameKey } from './geometry';
+import { clamp,linkedCamera,fitScale,screenToWorld,fromWorld,focusPoints,regionWorldPoints,zoomAt,filenameKey } from './geometry';
 import { saveProject,listProjects,importImage,loadImage,importPackage,exportPackage,download } from './storage';
 import { drawScene,outsideRegion } from './renderer';
 import { makeTour,recordingPlayback,sceneAt,type Playback } from './replay';
@@ -19,8 +20,8 @@ app.innerHTML=`<header class="topbar"><a class="brand" href="#" aria-label="对�
 <div class="toolbar"><div class="tool-group" role="group" aria-label="标记工具">${(['hand','point','rect','ellipse','pen'] as Tool[]).map((t,i)=>`<button data-tool="${t}" class="tool ${i===0?'active':''}" title="${['平移 H','点标记 P','矩形 R','椭圆 O','自由圈画 B'][i]}" aria-label="${['平移','点标记','矩形','椭圆','自由圈画'][i]}">${icon(t)}</button>`).join('')}</div><span class="divider"></span>${button('undo','','undo','icon-button')}${button('redo','','redo','icon-button')}<div class="toolbar-spacer"></div><select id="input-mode" aria-label="输入设备" title="触控板：双指平移、捏合缩放；鼠标：滚轮缩放"><option value="trackpad">触控板</option><option value="mouse">鼠标</option></select>${button('sync','同步视图','link','text-button active')}${button('align','对齐','align','text-button')}${button('marks','','eye','icon-button')}${button('fit','适应','fit','text-button')}${button('pixel','100%','','text-button')}</div>
 <div class="compare" data-view="both"><article class="image-panel"><div class="panel-label"><span><i class="dot original"></i>原图 <small>ORIGINAL</small></span><span id="original-scale">—</span></div><div class="canvas-wrap" data-side="original"><canvas id="original-canvas" aria-label="原图画布"></canvas><div class="empty-panel" id="original-empty"><span class="empty-symbol">${icon('image')}</span><h2>从原图开始</h2><p>拖入照片，或从电脑中选择<br>JPEG、PNG、WebP · 单张不超过 30 MB</p>${button('originals','选择原图','plus')}<small>照片只保存在当前浏览器</small></div></div><div class="panel-footer" id="original-info">尚未导入原图</div></article><article class="image-panel"><div class="panel-label"><span><i class="dot retouch"></i>修图 <small>RETOUCHED</small></span><div class="version-control"><select id="version-select" aria-label="修图版本"></select><button data-action="version" title="追加修图版本" class="icon-button">${icon('plus')}</button><span id="retouch-scale">—</span></div></div><div class="canvas-wrap" data-side="retouch"><canvas id="retouch-canvas" aria-label="修图画布"></canvas><div class="empty-panel" id="retouch-empty"><span class="empty-symbol paired">${icon('image')}</span><h2>看看，哪里不一样</h2><p>添加对应的修图<br>放大、平移与圈点，两侧同步</p>${button('retouches','选择修图','plus')}<small>支持多轮修图与逐项复核</small></div></div><div class="panel-footer" id="retouch-info">等待配对修图</div></article></div>
 <div class="canvas-status"><span id="canvas-hint">双指平移 · 捏合缩放 · 空格拖动 · Alt + 滚轮缩放</span><span id="selection-label"></span></div>
-<div class="replay-bar"><div class="replay-title">${icon('play')}<strong>审阅回放</strong><span id="replay-summary">把每一条意见，讲清楚。</span></div><div>${button('toggle-photos','照片列表','image','text-button')}${button('record','录制','record','text-button')}${button('replay','批注讲解','play','text-button')}</div></div><div id="player" hidden><div class="player-controls">${button('prev','上一条')}${button('play','播放','play')}${button('next','下一条')}<input type="range" id="seek" min="0" max="1000" value="0" aria-label="回放进度"><span id="play-time">0:00 / 0:00</span><select id="speed" aria-label="播放速度"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>${button('fullscreen','','fit','icon-button')}${button('stop','','close','icon-button')}</div><p id="play-caption"></p><div id="chapters"></div></div>
-<div class="filmstrip"><div class="filmstrip-heading"><span>照片列表 <b id="pair-count">0</b></span>${button('originals','添加','plus','text-button')}</div><div id="pairs"><div class="filmstrip-empty">导入照片后，在这里切换审阅。</div></div></div></section>
+<div class="replay-bar"><div class="replay-title">${icon('play')}<strong>审阅回放</strong><span id="replay-summary">把每一条意见，讲清楚。</span></div><div>${button('annotated-photos','有批注照片',undefined,'text-button')}${button('toggle-photos','照片列表','image','text-button')}${button('record','录制','record','text-button')}${button('replay','批注讲解','play','text-button')}</div></div><div id="player" hidden><div class="player-controls">${button('prev','上一条')}${button('play','播放','play')}${button('next','下一条')}<input type="range" id="seek" min="0" max="1000" value="0" aria-label="回放进度"><span id="play-time">0:00 / 0:00</span><select id="speed" aria-label="播放速度"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>${button('fullscreen','','fit','icon-button')}${button('stop','','close','icon-button')}</div><p id="play-caption"></p><div id="chapters"></div></div>
+<div class="filmstrip"><div class="filmstrip-heading"><span>照片列表 <b id="pair-count">0</b></span><div class="photo-navigation">${button('photo-prev','上一张',undefined,'text-button')}${button('photo-next','下一张',undefined,'text-button')}${button('originals','添加','plus','text-button')}</div></div><div id="pairs"><div class="filmstrip-empty">导入照片后，在这里切换审阅。</div></div></div></section>
 <aside class="sidebar"><div class="sidebar-heading"><div><span class="eyebrow">FEEDBACK</span><h2>修改意见 <span id="note-count">0</span></h2></div>${button('note','','plus','icon-button')}</div><div class="filters"><button data-filter="all" class="active">全部</button><button data-filter="pending">未通过</button><button data-filter="passed">已通过</button></div><div id="notes" class="notes"></div><div class="sidebar-bottom"><div id="review-progress"><span>等待开始审阅</span></div>${button('approve','确认此版本通过','check','approve-button')}<p>每条意见都与当前修图版本关联</p></div></aside></main>
 <footer class="app-footer"><span><i class="status-dot"></i>本地优先 · 图片无需上传</span><span>对照细节，表达准确。</span><button data-action="help">快捷键与帮助</button></footer><dialog id="dialog"></dialog><div id="toast" role="status" hidden></div><input type="file" id="file-input" hidden multiple accept="image/jpeg,image/png,image/webp"><input type="file" id="package-input" hidden accept=".retouch,.zip">`;
 
@@ -28,6 +29,7 @@ let inputMode:InputMode=localStorage.getItem('retouch-input-mode')==='mouse'?'mo
 $<HTMLSelectElement>('#input-mode').value=inputMode;
 $('#input-mode').addEventListener('change',()=>{inputMode=$<HTMLSelectElement>('#input-mode').value as InputMode;localStorage.setItem('retouch-input-mode',inputMode);$('#canvas-hint').textContent=inputMode==='trackpad'?'双指平移 · 捏合缩放 · 空格拖动 · Alt + 滚轮缩放':'滚轮缩放 · 拖动平移 · 空格临时平移';});
 let project:Project=newProject(),pair:Pair|undefined,version:Version|undefined,tool:Tool='hand',filter='all';
+let annotatedPhotosOnly=false;
 let camera:Camera={x:.5,y:.5,zoom:1},rightCamera={...camera},synced=true,showMarks=true,selectedId='',space=false;
 let undo:Project[]=[],redo:Project[]=[],saveQueue=Promise.resolve(),renderToken=0,pendingWrites=0,activeSide:Side='original';
 let pending:Annotation|undefined,pendingIsNew=false,addingRegion=false,oppositeRegion=false;
@@ -50,6 +52,16 @@ function persist(){
   saveQueue=saveQueue.catch(()=>{}).then(()=>saveProject(saved)).then(()=>{pendingWrites--;if(!pendingWrites)$('#saved').textContent='已保存到本机';}).catch(e=>{pendingWrites--;$('#saved').textContent='保存失败，请导出备份';error(e);});
 }
 function changed(){current();persist();renderUI();void renderCanvas();capture(true);}
+// Link viewport changes only; image alignment and annotation coordinates stay separate.
+function updateCamera(side:Side,next:Camera){
+  if(side==='original'){
+    if(synced)rightCamera=linkedCamera(camera,next,rightCamera);
+    camera=next;
+  }else{
+    if(synced)camera=linkedCamera(rightCamera,next,camera);
+    rightCamera=next;
+  }
+}
 function fit(){camera={x:.5,y:aspect()/2,zoom:1};rightCamera={...camera};void renderCanvas();capture(true);}
 function scene():Scene|undefined{
   if(!pair||!version)return;
@@ -58,20 +70,30 @@ function scene():Scene|undefined{
 function selected(){return version?.annotations.find(a=>a.id===selectedId);}
 function capture(force=false){if(!recording||recordPaused)return;const now=performance.now();if(!force&&now-lastRecord<50)return;const s=scene();if(!s)return;lastRecord=now;const time=now-recordStart;recording.events.push({time,scene:structuredClone(s)});recording.duration=time;}
 function selectPair(id:string){if(playback)return;project.selectedPairId=id;current();selectedId='';draft=undefined;fit();persist();renderUI();}
+function visiblePhotoPairs(){return exportPairs(project,annotatedPhotosOnly?'annotated':'all',undefined,[],false);}
+function browsePhoto(direction:number){
+  const photos=visiblePhotoPairs(),index=photos.findIndex(p=>p.id===pair?.id),next=photos[index<0?0:index+direction];
+  if(next){selectPair(next.id);$('#pairs .selected')?.scrollIntoView({block:'nearest',inline:'nearest'});}
+}
 function setTool(t:Tool){tool=t;document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===t));document.querySelectorAll<HTMLElement>('.canvas-wrap').forEach(e=>e.style.cursor=t==='hand'?'grab':'crosshair');}
 function renderUI(){
   current();$('.project-name').textContent=project.name;
   const o=asset(pair?.originalId),r=asset(version?.assetId);
   $('#photo-title').textContent=o?.name||'每一处细节，都值得对照。';
   $('#count-label').textContent=pair?`${project.pairs.indexOf(pair)+1} / ${project.pairs.length} 组照片`:'本地工作台';
-  $('#pair-count').textContent=String(project.pairs.length);
+  const photos=visiblePhotoPairs(),photoIndex=photos.findIndex(p=>p.id===pair?.id);
+  $('#pair-count').textContent=annotatedPhotosOnly?`${photos.length} / ${project.pairs.length} · 仅有批注`:String(project.pairs.length);
+  const annotatedButton=$<HTMLButtonElement>('[data-action="annotated-photos"]');
+  annotatedButton.classList.toggle('active',annotatedPhotosOnly);annotatedButton.setAttribute('aria-pressed',String(annotatedPhotosOnly));annotatedButton.disabled=!!playback;
+  $<HTMLButtonElement>('[data-action="photo-prev"]').disabled=!!playback||photoIndex<=0;
+  $<HTMLButtonElement>('[data-action="photo-next"]').disabled=!!playback||!photos.length||photoIndex===photos.length-1;
   $('#original-empty').hidden=!!o;$('#retouch-empty').hidden=!!r;
   $('#original-info').textContent=o?`${o.width} × ${o.height} · ${(o.size/1048576).toFixed(1)} MB`:'尚未导入原图';
   $('#retouch-info').textContent=r?`${r.name} · ${r.width} × ${r.height}`:'等待配对修图';
   $('#version-select').innerHTML=pair?.versions.map(v=>`<option value="${v.id}" ${version?.id===v.id?'selected':''}>${esc(v.name)}${v.approved?' · 已通过':''}</option>`).join('')||'<option>未配对</option>';
   const list=$('#pairs');list.replaceChildren();
-  for(const p of project.pairs){const a=asset(p.originalId)!,v=p.versions.find(v=>v.id===p.versionId),b=document.createElement('button');b.className=`photo-card ${p.id===pair?.id?'selected':''}`;b.dataset.pair=p.id;b.innerHTML=`<div class="thumbnail">${icon('image')}</div><span><strong>${esc(a.name)}</strong><small>${v?`${v.name} · ${v.approved?'已通过':`${v.annotations.length} 条意见`}`:'等待修图'}</small></span><em>${String(project.pairs.indexOf(p)+1).padStart(2,'0')}</em>`;list.append(b);if(a.preview){const img=document.createElement('img');img.src=a.preview;img.alt='';b.querySelector('.thumbnail')!.replaceChildren(img);}}
-  if(!project.pairs.length)list.innerHTML='<div class="filmstrip-empty">导入照片后，在这里切换审阅。</div>';
+  for(const p of photos){const a=asset(p.originalId)!,v=p.versions.find(v=>v.id===p.versionId),b=document.createElement('button');b.className=`photo-card ${p.id===pair?.id?'selected':''}`;b.dataset.pair=p.id;b.innerHTML=`<div class="thumbnail">${icon('image')}</div><span><strong>${esc(a.name)}</strong><small>${v?`${v.name} · ${v.approved?'已通过':`${v.annotations.length} 条意见`}`:'等待修图'}</small></span><em>${String(project.pairs.indexOf(p)+1).padStart(2,'0')}</em>`;list.append(b);if(a.preview){const img=document.createElement('img');img.src=a.preview;img.alt='';b.querySelector('.thumbnail')!.replaceChildren(img);}}
+  if(!photos.length)list.innerHTML=`<div class="filmstrip-empty">${annotatedPhotosOnly?'当前版本还没有批注，点击“有批注照片”可返回全部照片。':'导入照片后，在这里切换审阅。'}</div>`;
   renderNotes();
   const recordButton=$('[data-action="record"]');recordButton.classList.toggle('recording',!!recording);recordButton.innerHTML=icon('record')+(recording?'结束录制':'录制');
   $('#replay-summary').textContent=recording?(recordPaused?'录制已暂停':'正在录制审阅操作'):project.recordings.length?`${project.recordings.length} 段录制 · 可回看历史审阅`:'把每一条意见，讲清楚。';
@@ -111,7 +133,7 @@ async function paintCanvas(){
 function openDialog(title:string,body:string,kind='generic'){
   if(dialog.open)closeDialog();dialog.dataset.kind=kind;dialog.innerHTML=`<div class="dialog-heading"><div><span class="eyebrow">RETOUCH REVIEW</span><h2>${title}</h2></div>${button('close-dialog','','close','icon-button')}</div>${body}`;dialog.showModal();
 }
-function closeDialog(){dialogCleanup?.();dialogCleanup=undefined;dialog.close();}
+function closeDialog(){if(exporting)return;dialogCleanup?.();dialogCleanup=undefined;dialog.close();}
 dialog.addEventListener('cancel',e=>{e.preventDefault();closeDialog();});
 function requireVersion(){if(!version){toast('请先导入原图，并配对一张修图。');return false;}return true;}
 function focusAnnotation(id:string){selectedId=id;const a=selected();if(!a)return;const r=asset(version!.assetId)!;camera=focusPoints(a.regions.flatMap(g=>regionWorldPoints(g,version!.alignment,aspect(),r.height/r.width)),aspect());rightCamera={...camera};synced=true;renderNotes();void renderCanvas();capture(true);}
@@ -158,7 +180,7 @@ for(const side of ['original','retouch'] as Side[]){const c=canvas[side];
     mode:()=>inputMode,
     singleTouchPan:()=>tool==='hand'||!!playback,
     onStart:()=>{clickedMarker=undefined;drag=undefined;draft=undefined;renderCanvas();},
-    onChange:next=>{activeSide=side;if(synced){camera=next;rightCamera={...next};}else if(side==='original')camera=next;else rightCamera=next;if(playScene)playScene={...playScene,camera,rightCamera};renderCanvas();capture();},
+    onChange:next=>{activeSide=side;updateCamera(side,next);if(playScene)playScene={...playScene,camera,rightCamera};renderCanvas();capture();},
     onEnd:()=>capture(true),
     onTap:position=>{const id=markerAt(side,position);if(id)openAnnotationCard(id);},
   });
@@ -171,10 +193,10 @@ for(const side of ['original','retouch'] as Side[]){const c=canvas[side];
     if(clickedMarker?.pointerId===e.pointerId){
       const rect=c.getBoundingClientRect(),dx=e.clientX-rect.left-clickedMarker.start.x,dy=e.clientY-rect.top-clickedMarker.start.y;
       if(Math.hypot(dx,dy)>5)clickedMarker.moved=true;
-      if(clickedMarker.moved&&tool==='hand'){const scale=fitScale(rect.width,rect.height,aspect())*clickedMarker.camera.zoom,next={...clickedMarker.camera,x:clickedMarker.camera.x-dx/scale,y:clickedMarker.camera.y-dy/scale};if(synced){camera=next;rightCamera={...next};}else if(side==='original')camera=next;else rightCamera=next;renderCanvas();capture();}
+      if(clickedMarker.moved&&tool==='hand'){const scale=fitScale(rect.width,rect.height,aspect())*clickedMarker.camera.zoom,next={...clickedMarker.camera,x:clickedMarker.camera.x-dx/scale,y:clickedMarker.camera.y-dy/scale};updateCamera(side,next);renderCanvas();capture();}
       return;
     }
-    if(!drag||drag.side!==side)return;const rect=c.getBoundingClientRect(),pos={x:e.clientX-rect.left,y:e.clientY-rect.top};if(drag.region){const world=screenToWorld(pos,drag.camera,rect.width,rect.height,aspect()),r=asset(version!.assetId)!,point=side==='original'?world:fromWorld(world,version!.alignment,aspect(),r.height/r.width);if(drag.region.kind==='pen')drag.region.points.push(point);else if(drag.region.kind!=='point')drag.region.points=[drag.region.points[0],point];draft=drag.region;}else{const s=fitScale(rect.width,rect.height,aspect())*drag.camera.zoom,next={...drag.camera,x:drag.camera.x-(pos.x-drag.start.x)/s,y:drag.camera.y-(pos.y-drag.start.y)/s};if(synced){camera=next;rightCamera={...next};}else if(side==='original')camera=next;else rightCamera=next;}void renderCanvas();capture();});
+    if(!drag||drag.side!==side)return;const rect=c.getBoundingClientRect(),pos={x:e.clientX-rect.left,y:e.clientY-rect.top};if(drag.region){const world=screenToWorld(pos,drag.camera,rect.width,rect.height,aspect()),r=asset(version!.assetId)!,point=side==='original'?world:fromWorld(world,version!.alignment,aspect(),r.height/r.width);if(drag.region.kind==='pen')drag.region.points.push(point);else if(drag.region.kind!=='point')drag.region.points=[drag.region.points[0],point];draft=drag.region;}else{const s=fitScale(rect.width,rect.height,aspect())*drag.camera.zoom,next={...drag.camera,x:drag.camera.x-(pos.x-drag.start.x)/s,y:drag.camera.y-(pos.y-drag.start.y)/s};updateCamera(side,next);}void renderCanvas();capture();});
   const finish=(event:PointerEvent)=>{if(clickedMarker?.pointerId===event.pointerId){const hit=clickedMarker;clickedMarker=undefined;if(!hit.moved)openAnnotationCard(hit.id);else capture(true);return;}if(!drag)return;const region=drag.region;drag=undefined;if(region){if(region.kind!=='point'&&region.points.length<2){draft=undefined;void renderCanvas();return;}if(addingRegion&&pending){if(oppositeRegion){const first=pending.regions[0];if(first.side===region.side){toast('请在原标记的另一侧画布重新圈选。');draft=undefined;void renderCanvas();return;}first.opposite=region.points;}else pending.regions.push(region);addingRegion=false;oppositeRegion=false;showNoteEditor();}else editNote(undefined,region);}capture(true);};
   c.addEventListener('pointerup',finish);c.addEventListener('pointercancel',()=>{clickedMarker=undefined;drag=undefined;draft=undefined;void renderCanvas();});
   c.parentElement!.addEventListener('dragover',e=>{e.preventDefault();c.parentElement!.classList.add('drag-over');});c.parentElement!.addEventListener('dragleave',()=>c.parentElement!.classList.remove('drag-over'));c.parentElement!.addEventListener('drop',e=>{e.preventDefault();c.parentElement!.classList.remove('drag-over');if(playback||recording)return;importMode=side==='original'?'original':'retouch';void importFiles([...(e.dataTransfer?.files||[])]);});
@@ -210,25 +232,41 @@ function replayDialog(){openDialog('选择回放',`<div class="choice-card"><h3>
 }
 function finishRecording(){if(!recording)return;if(recordPaused)recordStart+=performance.now()-recordPauseStart;recordPaused=false;capture(true);remember();project.recordings.push(recording);recording=undefined;changed();toast('录制已保存，可在“批注讲解”中选择历史录制。');}
 function projectsDialog(){void listProjects().then(projects=>{openDialog('你的审阅项目',`<div class="dialog-actions left">${button('new-project','新建项目','plus')}${button('open-package','导入项目包','folder')}</div><div class="project-list">${projects.map(p=>`<button data-project="${p.id}"><strong>${esc(p.name)}</strong><span>${p.pairs.length} 组照片 · ${new Date(p.updatedAt).toLocaleString('zh-CN')}</span></button>`).join('')||'<p class="muted">还没有保存的项目</p>'}</div>`);dialog.querySelectorAll<HTMLButtonElement>('[data-project]').forEach(b=>b.onclick=()=>{project=projects.find(p=>p.id===b.dataset.project)!;undo=[];redo=[];closeDialog();current();fit();renderUI();restoreDraft();});}).catch(error);}
-function exportDialog(){if(!project.pairs.length){toast('先导入照片再导出反馈。');return;}openDialog('导出反馈',`<p class="dialog-intro">把修改意见交给后期，或保存一份可继续编辑的备份。</p><label>导出范围<select id="export-scope"><option value="current">当前照片</option><option value="all">整个项目</option><option value="selected">选择照片</option></select></label><div id="export-pairs" hidden>${project.pairs.map(p=>`<label class="checkbox"><input type="checkbox" value="${p.id}" ${p.id===pair?.id?'checked':''}>${esc(asset(p.originalId)!.name)}</label>`).join('')}</div><div class="form-row"><label>批注范围<select id="export-filter"><option value="all">全部批注</option><option value="pending">仅未通过</option></select></label><label>PNG 输出总宽度<select id="export-width"><option value="2400">2400 px</option><option value="3600">3600 px</option><option value="4800">4800 px</option></select></label></div><label class="checkbox"><input type="checkbox" id="export-viewport">PNG 使用当前视野（仅当前照片）</label><label>HTML 回放内容<select id="export-replay"><option value="tour">按当前批注讲解</option>${project.recordings.map(r=>`<option value="${r.id}">${esc(r.name)}（完整历史录制）</option>`).join('')}</select></label><div class="export-options">${[['png','PNG 对比图','适合聊天发送'],['pdf','PDF 反馈单','含全图、局部对照与完整意见'],['html','离线 HTML 回放','无需网络，可交互播放'],['package','可编辑项目包','完整备份所有版本与源图']].map(([id,title,desc])=>`<button data-export="${id}">${icon('download')}<span><strong>${title}</strong><small>${desc}</small></span>${icon('chevron')}</button>`).join('')}</div><p id="export-estimate" class="muted"></p><p class="muted">项目包包含原始文件，可能含拍摄元数据。PDF / PNG / HTML 使用重新编码的展示图片。单张导出尺寸放大不会增加真实细节。</p><progress id="export-progress" max="1" value="0" hidden></progress><button id="cancel-export" hidden>取消导出</button>`,'export');
-  const update=()=>{const scope=$<HTMLSelectElement>('#export-scope').value;$('#export-pairs').hidden=scope!=='selected';const count=scope==='current'?1:scope==='all'?project.pairs.length:dialog.querySelectorAll('#export-pairs input:checked').length;$('#export-estimate').textContent=`预计 ${count} 组照片；完整项目源文件约 ${(project.assets.reduce((s,a)=>s+a.size,0)/1048576).toFixed(1)} MB。HTML 内嵌图片体积以导出结果为准。`;};$('#export-scope').onchange=update;$('#export-pairs').onchange=update;update();
+function exportDialog(){if(!project.pairs.length){toast('先导入照片再导出反馈。');return;}openDialog('导出反馈',`<p class="dialog-intro">把修改意见交给后期，或保存一份可继续编辑的备份。</p><div class="export-status" hidden><p id="export-status" role="status" aria-live="polite"></p><progress id="export-progress" max="1" value="0"></progress><button id="cancel-export" hidden>取消导出</button></div><label>导出范围<select id="export-scope"><option value="current">当前照片</option><option value="all">整个项目</option><option value="annotated">仅含批注的照片</option><option value="selected">选择照片</option></select></label><div id="export-pairs" hidden>${project.pairs.map(p=>`<label class="checkbox"><input type="checkbox" value="${p.id}" ${p.id===pair?.id?'checked':''}>${esc(asset(p.originalId)!.name)}</label>`).join('')}</div><div class="form-row"><label>批注范围<select id="export-filter"><option value="all">全部批注</option><option value="pending">仅未通过</option></select></label><label>PNG 输出总宽度<select id="export-width"><option value="2400">2400 px</option><option value="3600">3600 px</option><option value="4800">4800 px</option></select></label></div><label class="checkbox"><input type="checkbox" id="export-viewport">PNG 使用当前视野（仅当前照片）</label><label>HTML 回放内容<select id="export-replay"><option value="tour">按当前批注讲解</option>${project.recordings.map(r=>`<option value="${r.id}">${esc(r.name)}（完整历史录制）</option>`).join('')}</select></label><div class="export-options">${[['png','PNG 对比图','适合聊天发送'],['pdf','PDF 反馈单','批注局部对照与完整意见'],['html','离线 HTML 回放','无需网络，可交互播放'],['package','可编辑项目包','完整备份所有版本与源图']].map(([id,title,desc])=>`<button data-export="${id}">${icon('download')}<span><strong>${title}</strong><small>${desc}</small></span>${icon('chevron')}</button>`).join('')}</div><p id="export-estimate" class="muted"></p><p class="muted">项目包包含原始文件，可能含拍摄元数据。PDF / PNG / HTML 使用重新编码的展示图片。单张导出尺寸放大不会增加真实细节。</p>`,'export');
+  const update=()=>{const scope=$<HTMLSelectElement>('#export-scope').value;$('#export-pairs').hidden=scope!=='selected';const count=selectedExportPairs().length;$('#export-estimate').textContent=`反馈将导出 ${count} 组照片（当前修图版本）。仅含批注按所选批注范围筛选。项目包始终备份完整项目，历史录制始终导出完整录制，不受照片筛选影响。`;};$('#export-scope').onchange=update;$('#export-filter').onchange=update;$('#export-pairs').onchange=update;update();
 }
+function selectedExportPairs(){
+  return exportPairs(project,$<HTMLSelectElement>('#export-scope').value,pair?.id,[...dialog.querySelectorAll<HTMLInputElement>('#export-pairs input:checked')].map(e=>e.value),$<HTMLSelectElement>('#export-filter').value==='pending');
+}
+let exporting=false;
 async function runExport(kind:string){
+  if(exporting)return;
   const scope=$<HTMLSelectElement>('#export-scope').value,pendingOnly=$<HTMLSelectElement>('#export-filter').value==='pending';
-  const ids=scope==='current'?[pair?.id]:scope==='all'?project.pairs.map(p=>p.id):[...dialog.querySelectorAll<HTMLInputElement>('#export-pairs input:checked')].map(e=>e.value);
-  const p=snapshot();p.pairs=p.pairs.filter(pair=>ids.includes(pair.id));if(!p.pairs.length){toast('请选择至少一组照片');return;}
+  const width=Number($<HTMLSelectElement>('#export-width').value),viewport=$<HTMLInputElement>('#export-viewport').checked&&scope==='current';
+  const choice=$<HTMLSelectElement>('#export-replay').value,rec=project.recordings.find(r=>r.id===choice);
+  const p=snapshot(),ids=selectedExportPairs().map(p=>p.id);p.pairs=p.pairs.filter(pair=>ids.includes(pair.id));
+  const status=$('#export-status'),progress=$<HTMLProgressElement>('#export-progress'),cancel=$<HTMLButtonElement>('#cancel-export');
+  status.parentElement!.hidden=false;progress.value=0;
+  if(kind!=='package'&&!(kind==='html'&&rec)&&!p.pairs.length){status.textContent='没有符合条件的照片，请调整导出范围或批注范围。';return;}
   if(pendingOnly)for(const pair of p.pairs)for(const v of pair.versions)v.annotations=v.annotations.filter(a=>a.status!=='已通过');
-  let cancelled=false;$('#cancel-export').hidden=false;$('#cancel-export').onclick=()=>{cancelled=true;};const progress=$<HTMLProgressElement>('#export-progress');progress.hidden=false;
-  dialog.querySelectorAll<HTMLButtonElement>('[data-export]').forEach(b=>b.disabled=true);
-  const report=(n:number)=>{if(cancelled)throw new Error('导出已取消，项目和批注已保留');progress.value=n;};
-  try{const {exportPng,exportPdf,exportHtml}=await import('./exports');const name=project.name.replace(/[\\/:*?"<>|]/g,'_');let blob:Blob;
-    if(kind==='package'){blob=await exportPackage(project,report);report(1);download(blob,`${name}.retouch`);}
-    else if(kind==='png'){const width=Number($<HTMLSelectElement>('#export-width').value),viewport=$<HTMLInputElement>('#export-viewport').checked&&scope==='current';blob=await exportPng(p,width,report,viewport?{camera,rightCamera}:undefined);report(1);download(blob,`${name}.${p.pairs.length===1?'png':'zip'}`);}
-    else if(kind==='pdf'){blob=await exportPdf(p,report);report(1);download(blob,`${name}-反馈.pdf`);}
-    else {const choice=$<HTMLSelectElement>('#export-replay').value;const rec=project.recordings.find(r=>r.id===choice);blob=await exportHtml(rec?project:p,rec?recordingPlayback(rec,true):makeTour(p,false,true),report);report(1);download(blob,`${name}-回放.html`);}
-    toast('导出文件已生成。');
-  }catch(e){error(e);}finally{dialog.querySelectorAll<HTMLButtonElement>('[data-export]').forEach(b=>b.disabled=false);$('#cancel-export').hidden=true;}
+  let cancelled=false;exporting=true;cancel.hidden=false;cancel.disabled=false;cancel.onclick=()=>{cancelled=true;cancel.disabled=true;status.textContent='正在取消，请稍候…';};
+  const controls=[...dialog.querySelectorAll<HTMLButtonElement|HTMLInputElement|HTMLSelectElement>('button,input,select')].filter(e=>e!==cancel);
+  controls.forEach(b=>b.disabled=true);
+  const preventClose=(event:Event)=>event.preventDefault();dialog.addEventListener('cancel',preventClose);
+  // The shared cancel handler must also leave the active export dialog intact.
+  const report=(n:number,message='正在生成文件')=>{if(cancelled)throw new Error('导出已取消，项目和批注已保留');progress.value=n;status.textContent=`${message} · ${Math.round(n*100)}%`;};
+  try{
+    report(0,'正在准备导出');await new Promise(resolve=>setTimeout(resolve,30));report(0,'正在加载导出组件');
+    const {exportPng,exportPdf,exportHtml}=await import('./exports');const name=project.name.replace(/[\\/:*?"<>|]/g,'_');let blob:Blob,filename:string;
+    if(kind==='package'){blob=await exportPackage(project,report);filename=`${name}.retouch`;}
+    else if(kind==='png'){blob=await exportPng(p,width,report,viewport?{camera:{...camera},rightCamera:{...rightCamera}}:undefined);filename=`${name}.${p.pairs.length===1?'png':'zip'}`;}
+    else if(kind==='pdf'){blob=await exportPdf(p,report);filename=`${name}-反馈.pdf`;}
+    else {blob=await exportHtml(rec?project:p,rec?recordingPlayback(rec,true):makeTour(p,false,true),report);filename=`${name}-回放.html`;}
+    report(1,'文件已生成');download(blob,filename);status.textContent=`已生成 ${filename}（${(blob.size/1048576).toFixed(1)} MB），已发起下载，请查看浏览器下载列表。`;
+  }catch(e){status.textContent=e instanceof Error?e.message:String(e);}
+  finally{exporting=false;dialog.removeEventListener('cancel',preventClose);controls.forEach(b=>b.disabled=false);cancel.hidden=true;}
 }
+
 const actions:Record<string,()=>void>={
   originals:()=>chooseFiles('original'),retouches:()=>chooseFiles('retouch'),version:()=>{if(pair)chooseFiles('version');else toast('先导入原图');},
   import:()=>openDialog('导入照片',`<div class="import-grid"><button data-action="originals">${icon('image')}<strong>添加原图</strong><span>创建新的照片组</span></button><button data-action="retouches">${icon('image')}<strong>添加修图</strong><span>与原图配对或追加版本</span></button></div><p class="muted">JPEG / PNG / WebP · 单张不超过 30 MB、2400 万像素</p>`),
@@ -236,8 +274,8 @@ const actions:Record<string,()=>void>={
   projects:projectsDialog,'new-project':()=>{project=newProject();undo=[];redo=[];closeDialog();current();fit();changed();},
   'open-package':()=>{$<HTMLInputElement>('#package-input').value='';$<HTMLInputElement>('#package-input').click();},
   note:()=>editNote(),fit,align:alignmentDialog,
-  pixel:()=>{if(!requireVersion())return;const rect=canvas[activeSide].getBoundingClientRect(),a=asset(activeSide==='original'?pair!.originalId:version!.assetId)!;const zoom=clamp(a.width/(fitScale(rect.width,rect.height,aspect())*(activeSide==='retouch'?version!.alignment.scale:1)),.1,40);const next={...(activeSide==='original'?camera:rightCamera),zoom};if(synced){camera=next;rightCamera={...next};}else if(activeSide==='original')camera=next;else rightCamera=next;void renderCanvas();capture(true);},
-  sync:()=>{synced=!synced;if(synced){camera={...(activeSide==='original'?camera:rightCamera)};rightCamera={...camera};}renderUI();void renderCanvas();capture(true);},
+  pixel:()=>{if(!requireVersion())return;const rect=canvas[activeSide].getBoundingClientRect(),a=asset(activeSide==='original'?pair!.originalId:version!.assetId)!;const zoom=clamp(a.width/(fitScale(rect.width,rect.height,aspect())*(activeSide==='retouch'?version!.alignment.scale:1)),.1,40);const next={...(activeSide==='original'?camera:rightCamera),zoom};updateCamera(activeSide,next);void renderCanvas();capture(true);},
+  sync:()=>{synced=!synced;renderUI();void renderCanvas();capture(true);},
   marks:()=>{showMarks=!showMarks;renderUI();void renderCanvas();capture(true);},
   undo:()=>{if(!undo.length)return;redo.push(snapshot());project=undo.pop()!;changed();},redo:()=>{if(!redo.length)return;undo.push(snapshot());project=redo.pop()!;changed();},
   'close-dialog':closeDialog,'cancel-note':()=>{pending=undefined;localStorage.removeItem(`retouch-draft-${project.id}`);closeDialog();},
@@ -246,6 +284,17 @@ const actions:Record<string,()=>void>={
   opposite:()=>{collectPending();draftSave();closeDialog();addingRegion=true;oppositeRegion=true;setTool(pending!.regions[0].kind);toast(`请在${pending!.regions[0].side==='original'?'修图':'原图'}画布指定对应位置。`);},
   approve:()=>{if(!version||version.annotations.some(a=>a.status!=='已通过'))return;remember();version.approved=true;changed();},
   'toggle-sidebar':()=>{document.body.classList.toggle('sidebar-hidden');},
+  'annotated-photos':()=>{
+    annotatedPhotosOnly=!annotatedPhotosOnly;document.body.classList.remove('photos-hidden');
+    const photos=visiblePhotoPairs();
+    if(annotatedPhotosOnly&&photos.length){
+      if(matchMedia('(min-width: 801px)').matches)document.body.classList.remove('sidebar-hidden');filter='all';
+      document.querySelectorAll<HTMLElement>('[data-filter]').forEach(b=>b.classList.toggle('active',b.dataset.filter==='all'));
+      if(!photos.some(p=>p.id===pair?.id)){selectPair(photos[0].id);return;}
+    }
+    renderUI();
+  },
+  'photo-prev':()=>browsePhoto(-1),'photo-next':()=>browsePhoto(1),
   'toggle-photos':()=>{document.body.classList.toggle('photos-hidden');},
   replay:replayDialog,
   record:()=>{if(recording){openDialog('结束本次录制',`<p class="dialog-intro">已记录 ${formatTime(recording.duration)} 的审阅过程。文字按确认后的内容保存。</p><div class="dialog-actions">${button('pause-record',recordPaused?'继续录制':'暂停录制')}${button('finish-record','保存并结束','','primary')}</div>`);return;}if(!requireVersion())return;recording={id:uid(),name:`审阅录制 ${project.recordings.length+1}`,createdAt:new Date().toISOString(),duration:0,events:[]};recordStart=performance.now();recordPaused=false;capture(true);renderUI();},

@@ -46,3 +46,31 @@ test('批注命中覆盖编号、区域和对侧，隐藏标记时不命中',()=
   assert.equal(hitAnnotation({...s,showMarks:false},'original',center,600,800,1.5,1.5),undefined);
   assert.equal(hitAnnotation(s,'original',{x:5,y:5},600,800,1.5,1.5),undefined);
 });
+
+import {linkedCamera} from '../src/geometry.ts';
+test('重新同步保留独立视角，双向平移按各自比例移动且缩放保持对应锚点',()=>{
+  const left={x:.4,y:.7,zoom:2},right={x:.65,y:.5,zoom:3};
+  assert.deepEqual(linkedCamera(left,left,right),right);
+  const panned={...left,x:.6,y:.8},other=linkedCamera(left,panned,right);
+  near((panned.x-left.x)*left.zoom,(other.x-right.x)*right.zoom);
+  near((panned.y-left.y)*left.zoom,(other.y-right.y)*right.zoom);
+  const pos={x:130,y:240},zoomed=zoomAt(right,pos,1.4,600,800,1.5);
+  const linked=linkedCamera(right,zoomed,left);
+  near(linked.zoom/zoomed.zoom,left.zoom/right.zoom);
+  const before=screenToWorld(pos,left,600,800,1.5),after=screenToWorld(pos,linked,600,800,1.5);
+  near(before.x,after.x);near(before.y,after.y);
+  const restored=linkedCamera(zoomed,right,linked);
+  near(restored.x,left.x);near(restored.y,left.y);near(restored.zoom,left.zoom);
+});
+
+import {exportPairs} from '../src/export-selection.ts';
+test('仅含批注按当前版本和状态筛选，保持原项目不变',()=>{
+  const p=sample(),base=p.pairs[0];
+  const passed=structuredClone(base);passed.id='passed';passed.versions[0].annotations=passed.versions[0].annotations.filter(a=>a.status==='已通过');
+  const empty=structuredClone(base);empty.id='empty';empty.versions.push({...structuredClone(empty.versions[0]),id:'new',annotations:[]});empty.versionId='new';
+  p.pairs.push(passed,empty,{id:'unpaired',originalId:'o',versionId:'',versions:[]});
+  assert.deepEqual(exportPairs(p,'annotated',undefined,[],false).map(p=>p.id),['p','passed']);
+  assert.deepEqual(exportPairs(p,'annotated',undefined,[],true).map(p=>p.id),['p']);
+  assert.equal(exportPairs(p,'all',undefined,[],true).length,4);
+  assert.equal(p.pairs[0].versions[0].annotations.length,2);
+});
