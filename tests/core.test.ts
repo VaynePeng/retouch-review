@@ -74,3 +74,17 @@ test('仅含批注按当前版本和状态筛选，保持原项目不变',()=>{
   assert.equal(exportPairs(p,'all',undefined,[],true).length,4);
   assert.equal(p.pairs[0].versions[0].annotations.length,2);
 });
+
+import {filterPhotos,roundVersion} from '../src/photo-filter.ts';
+test('按指定轮次筛选照片，只判断该版的未通过批注',()=>{
+  const p=sample(),first=p.pairs[0];
+  first.versions.push({...structuredClone(first.versions[0]),id:'v2',name:'V2',annotations:[]});
+  const second=structuredClone(first);second.id='second';second.versions[1].annotations=structuredClone(first.versions[0].annotations);
+  const oldOnly=structuredClone(first);oldOnly.id='old';oldOnly.versions.pop();
+  p.pairs.push(second,oldOnly);
+  assert.deepEqual(filterPhotos(p,2,'all').map(p=>p.id),['p','second']);
+  assert.deepEqual(filterPhotos(p,2,'pending').map(p=>p.id),['second']);
+  assert.equal(roundVersion(first,2)?.id,'v2');
+  assert.equal(first.versionId,'v');
+  assert.deepEqual(filterPhotos(p,3,'all'),[]);
+});

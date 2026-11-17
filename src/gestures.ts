@@ -27,7 +27,7 @@ interface Options {
   onEnd:()=>void;
   onTap?:(position:Point)=>void;
 }
-export function bindViewportGestures(canvas:HTMLCanvasElement,options:Options) {
+export function bindViewportGestures(canvas:HTMLElement,options:Options) {
   let safariGesture=false;
   canvas.addEventListener('wheel',event=>{
     event.preventDefault();if(!options.enabled()||safariGesture)return;

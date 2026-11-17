@@ -1,10 +1,12 @@
+import { bindPreviewGestures } from './preview-gestures';
+import { filterPhotos, roundVersion, type PhotoStatus } from './photo-filter';
 import { exportPairs } from './export-selection';
 import { hitAnnotation } from './hit-test';
 import { bindViewportGestures, type InputMode } from './gestures';
 import './style.css';
 import { type Project,type Pair,type Version,type Asset,type Region,type Annotation,type Scene,type Side,type Tool,type Camera,type Recording,uid,identity,newProject } from './model';
 import { clamp,linkedCamera,fitScale,screenToWorld,fromWorld,focusPoints,regionWorldPoints,zoomAt,filenameKey } from './geometry';
-import { saveProject,listProjects,importImage,loadImage,importPackage,exportPackage,download } from './storage';
+import { saveProject,listProjects,importImage,loadImage,getBlob,importPackage,exportPackage,download } from './storage';
 import { drawScene,outsideRegion } from './renderer';
 import { makeTour,recordingPlayback,sceneAt,type Playback } from './replay';
 
@@ -15,21 +17,22 @@ const $=<T extends HTMLElement=HTMLElement>(q:string)=>document.querySelector<T>
 const button=(action:string,label:string,i?:string,cls='')=>`<button type="button" data-action="${action}" class="${cls}">${i?icon(i):''}${label}</button>`;
 const app=$('#app');
 document.body.classList.add('sidebar-hidden','photos-hidden');
-app.innerHTML=`<header class="topbar"><a class="brand" href="#" aria-label="对照修图首页"><span class="brand-mark">◧</span><strong>对照<span>RETOUCH REVIEW</span></strong></a><span class="divider"></span><button class="project-name" data-action="rename">未命名审阅</button><span id="saved" class="save-state">准备就绪</span><div class="top-actions">${button('projects','项目','folder')}${button('import','导入照片','plus')}${button('export','导出反馈','download','primary')}</div></header>
+app.innerHTML=`<header class="topbar"><a class="brand" href="#" aria-label="对照修图首页"><span class="brand-mark">◧</span><strong>对照<span>RETOUCH REVIEW</span></strong></a><span class="divider"></span><button class="project-name" data-action="rename">未命名审阅</button><span id="saved" class="save-state">准备就绪</span><div class="top-actions">${button('projects','项目','folder')}${button('import','导入照片','plus')}${button('preview-retouches','预览')}${button('export','导出反馈','download','primary')}</div></header>
 <main><section class="workspace"><div class="workspace-heading"><div><div class="eyebrow">REVIEW WORKSPACE</div><h1 id="photo-title">每一处细节，都值得对照。</h1></div><div class="heading-actions"><div class="view-modes" role="group" aria-label="图片查看模式"><button data-view="both" aria-pressed="true">对比</button><button data-view="original" aria-pressed="false">仅原图</button><button data-view="retouch" aria-pressed="false">仅精修</button></div><span id="count-label">本地工作台</span>${button('toggle-sidebar','批注','menu','text-button')}</div></div>
 <div class="toolbar"><div class="tool-group" role="group" aria-label="标记工具">${(['hand','point','rect','ellipse','pen'] as Tool[]).map((t,i)=>`<button data-tool="${t}" class="tool ${i===0?'active':''}" title="${['平移 H','点标记 P','矩形 R','椭圆 O','自由圈画 B'][i]}" aria-label="${['平移','点标记','矩形','椭圆','自由圈画'][i]}">${icon(t)}</button>`).join('')}</div><span class="divider"></span>${button('undo','','undo','icon-button')}${button('redo','','redo','icon-button')}<div class="toolbar-spacer"></div><select id="input-mode" aria-label="输入设备" title="触控板：双指平移、捏合缩放；鼠标：滚轮缩放"><option value="trackpad">触控板</option><option value="mouse">鼠标</option></select>${button('sync','同步视图','link','text-button active')}${button('align','对齐','align','text-button')}${button('marks','','eye','icon-button')}${button('fit','适应','fit','text-button')}${button('pixel','100%','','text-button')}</div>
 <div class="compare" data-view="both"><article class="image-panel"><div class="panel-label"><span><i class="dot original"></i>原图 <small>ORIGINAL</small></span><span id="original-scale">—</span></div><div class="canvas-wrap" data-side="original"><canvas id="original-canvas" aria-label="原图画布"></canvas><div class="empty-panel" id="original-empty"><span class="empty-symbol">${icon('image')}</span><h2>从原图开始</h2><p>拖入照片，或从电脑中选择<br>JPEG、PNG、WebP · 单张不超过 30 MB</p>${button('originals','选择原图','plus')}<small>照片只保存在当前浏览器</small></div></div><div class="panel-footer" id="original-info">尚未导入原图</div></article><article class="image-panel"><div class="panel-label"><span><i class="dot retouch"></i>修图 <small>RETOUCHED</small></span><div class="version-control"><select id="version-select" aria-label="修图版本"></select><button data-action="version" title="追加修图版本" class="icon-button">${icon('plus')}</button><span id="retouch-scale">—</span></div></div><div class="canvas-wrap" data-side="retouch"><canvas id="retouch-canvas" aria-label="修图画布"></canvas><div class="empty-panel" id="retouch-empty"><span class="empty-symbol paired">${icon('image')}</span><h2>看看，哪里不一样</h2><p>添加对应的修图<br>放大、平移与圈点，两侧同步</p>${button('retouches','选择修图','plus')}<small>支持多轮修图与逐项复核</small></div></div><div class="panel-footer" id="retouch-info">等待配对修图</div></article></div>
 <div class="canvas-status"><span id="canvas-hint">双指平移 · 捏合缩放 · 空格拖动 · Alt + 滚轮缩放</span><span id="selection-label"></span></div>
-<div class="replay-bar"><div class="replay-title">${icon('play')}<strong>审阅回放</strong><span id="replay-summary">把每一条意见，讲清楚。</span></div><div>${button('annotated-photos','有批注照片',undefined,'text-button')}${button('toggle-photos','照片列表','image','text-button')}${button('record','录制','record','text-button')}${button('replay','批注讲解','play','text-button')}</div></div><div id="player" hidden><div class="player-controls">${button('prev','上一条')}${button('play','播放','play')}${button('next','下一条')}<input type="range" id="seek" min="0" max="1000" value="0" aria-label="回放进度"><span id="play-time">0:00 / 0:00</span><select id="speed" aria-label="播放速度"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>${button('fullscreen','','fit','icon-button')}${button('stop','','close','icon-button')}</div><p id="play-caption"></p><div id="chapters"></div></div>
+<div class="photo-filters"><label>修图轮次 <select id="photo-round" aria-label="修图轮次"><option value="0">全部轮次（当前版本）</option></select></label><label>批注轮次 <select id="annotation-round" aria-label="批注轮次"><option value="0">跟随照片版本</option></select></label><label>照片状态 <select id="photo-status" aria-label="照片状态"><option value="all">全部照片</option><option value="annotated">有批注</option><option value="pending">仅看未通过</option></select></label><span id="photo-filter-summary" role="status"></span></div><div class="replay-bar"><div class="replay-title">${icon('play')}<strong>审阅回放</strong><span id="replay-summary">把每一条意见，讲清楚。</span></div><div>${button('annotated-photos','有批注照片',undefined,'text-button')}${button('toggle-photos','照片列表','image','text-button')}${button('record','录制','record','text-button')}${button('replay','批注讲解','play','text-button')}</div></div><div id="player" hidden><div class="player-controls">${button('prev','上一条')}${button('play','播放','play')}${button('next','下一条')}<input type="range" id="seek" min="0" max="1000" value="0" aria-label="回放进度"><span id="play-time">0:00 / 0:00</span><select id="speed" aria-label="播放速度"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>${button('fullscreen','','fit','icon-button')}${button('stop','','close','icon-button')}</div><p id="play-caption"></p><div id="chapters"></div></div>
 <div class="filmstrip"><div class="filmstrip-heading"><span>照片列表 <b id="pair-count">0</b></span><div class="photo-navigation">${button('photo-prev','上一张',undefined,'text-button')}${button('photo-next','下一张',undefined,'text-button')}${button('originals','添加','plus','text-button')}</div></div><div id="pairs"><div class="filmstrip-empty">导入照片后，在这里切换审阅。</div></div></div></section>
-<aside class="sidebar"><div class="sidebar-heading"><div><span class="eyebrow">FEEDBACK</span><h2>修改意见 <span id="note-count">0</span></h2></div>${button('note','','plus','icon-button')}</div><div class="filters"><button data-filter="all" class="active">全部</button><button data-filter="pending">未通过</button><button data-filter="passed">已通过</button></div><div id="notes" class="notes"></div><div class="sidebar-bottom"><div id="review-progress"><span>等待开始审阅</span></div>${button('approve','确认此版本通过','check','approve-button')}<p>每条意见都与当前修图版本关联</p></div></aside></main>
+<aside class="sidebar"><div class="sidebar-heading"><div><span class="eyebrow">FEEDBACK</span><h2>修改意见 <span id="note-count">0</span></h2></div>${button('note','','plus','icon-button')}</div><p id="annotation-mode" class="annotation-mode" role="status"></p><div class="filters"><button data-filter="all" class="active">全部</button><button data-filter="pending">未通过</button><button data-filter="passed">已通过</button></div><div id="notes" class="notes"></div><div class="sidebar-bottom"><div id="review-progress"><span>等待开始审阅</span></div>${button('approve','确认此版本通过','check','approve-button')}<p>每条意见都与当前修图版本关联</p></div></aside></main>
 <footer class="app-footer"><span><i class="status-dot"></i>本地优先 · 图片无需上传</span><span>对照细节，表达准确。</span><button data-action="help">快捷键与帮助</button></footer><dialog id="dialog"></dialog><div id="toast" role="status" hidden></div><input type="file" id="file-input" hidden multiple accept="image/jpeg,image/png,image/webp"><input type="file" id="package-input" hidden accept=".retouch,.zip">`;
 
 let inputMode:InputMode=localStorage.getItem('retouch-input-mode')==='mouse'?'mouse':'trackpad';
 $<HTMLSelectElement>('#input-mode').value=inputMode;
 $('#input-mode').addEventListener('change',()=>{inputMode=$<HTMLSelectElement>('#input-mode').value as InputMode;localStorage.setItem('retouch-input-mode',inputMode);$('#canvas-hint').textContent=inputMode==='trackpad'?'双指平移 · 捏合缩放 · 空格拖动 · Alt + 滚轮缩放':'滚轮缩放 · 拖动平移 · 空格临时平移';});
 let project:Project=newProject(),pair:Pair|undefined,version:Version|undefined,tool:Tool='hand',filter='all';
-let annotatedPhotosOnly=false;
+let annotationRound=0;
+let photoRound=0,photoStatus:PhotoStatus='all',filterProjectId='';
 let camera:Camera={x:.5,y:.5,zoom:1},rightCamera={...camera},synced=true,showMarks=true,selectedId='',space=false;
 let undo:Project[]=[],redo:Project[]=[],saveQueue=Promise.resolve(),renderToken=0,pendingWrites=0,activeSide:Side='original';
 let pending:Annotation|undefined,pendingIsNew=false,addingRegion=false,oppositeRegion=false;
@@ -42,7 +45,7 @@ const dialog=$('#dialog') as HTMLDialogElement;
 function toast(message:string){$('#toast').textContent=message;$('#toast').hidden=false;}
 $('#toast').onclick=()=>{$('#toast').hidden=true;};
 function error(e:unknown){toast(e instanceof Error?e.message:String(e));}
-function current(){pair=project.pairs.find(p=>p.id===project.selectedPairId);version=pair?.versions.find(v=>v.id===pair?.versionId);}
+function current(){if(filterProjectId!==project.id){photoRound=0;annotationRound=0;photoStatus='all';filterProjectId=project.id;}pair=project.pairs.find(p=>p.id===project.selectedPairId);version=pair?.versions.find(v=>v.id===pair?.versionId);}
 function asset(id:string|undefined){return project.assets.find(a=>a.id===id);}
 function aspect(){const a=asset(pair?.originalId);return a?a.height/a.width:1;}
 function snapshot(){return structuredClone(project);}
@@ -65,12 +68,51 @@ function updateCamera(side:Side,next:Camera){
 function fit(){camera={x:.5,y:aspect()/2,zoom:1};rightCamera={...camera};void renderCanvas();capture(true);}
 function scene():Scene|undefined{
   if(!pair||!version)return;
-  return {pairId:pair.id,versionId:version.id,originalId:pair.originalId,retouchId:version.assetId,alignment:version.alignment,annotations:version.annotations,camera,rightCamera,showMarks,selectedId,...(draft?{draft}: {})};
+  return {pairId:pair.id,versionId:version.id,originalId:pair.originalId,retouchId:version.assetId,alignment:version.alignment,annotations:displayedAnnotations(),camera,rightCamera,showMarks,selectedId,...(draft?{draft}: {})};
 }
-function selected(){return version?.annotations.find(a=>a.id===selectedId);}
+function annotationVersion(){return pair?(annotationRound?roundVersion(pair,annotationRound):version):undefined;}
+function annotationsReadOnly(){return !version||annotationVersion()?.id!==version.id;}
+function displayedAnnotations(){
+  const source=annotationVersion();
+  if(!source||!version)return [];
+  if(source.id===version.id)return source.annotations;
+  const oldAsset=asset(source.assetId)!,newAsset=asset(version.assetId)!;
+  // Map historical anchors through the original image without changing stored regions.
+  return source.annotations.map(a=>({...a,regions:a.regions.map(g=>({
+    ...g,side:'original' as const,
+    points:regionWorldPoints(g,source.alignment,aspect(),oldAsset.height/oldAsset.width,'original'),
+    opposite:regionWorldPoints(g,source.alignment,aspect(),oldAsset.height/oldAsset.width,'retouch').map(p=>fromWorld(p,version!.alignment,aspect(),newAsset.height/newAsset.width)),
+  }))}));
+}
+function selected(){return displayedAnnotations().find(a=>a.id===selectedId);}
 function capture(force=false){if(!recording||recordPaused)return;const now=performance.now();if(!force&&now-lastRecord<50)return;const s=scene();if(!s)return;lastRecord=now;const time=now-recordStart;recording.events.push({time,scene:structuredClone(s)});recording.duration=time;}
-function selectPair(id:string){if(playback)return;project.selectedPairId=id;current();selectedId='';draft=undefined;fit();persist();renderUI();}
-function visiblePhotoPairs(){return exportPairs(project,annotatedPhotosOnly?'annotated':'all',undefined,[],false);}
+function selectPair(id:string,preserveView=false){if(playback)return;project.selectedPairId=id;const target=project.pairs.find(p=>p.id===id),v=target&&roundVersion(target,photoRound);if(target&&v)target.versionId=v.id;current();selectedId='';draft=undefined;if(preserveView)void renderCanvas();else fit();persist();renderUI();}
+function visiblePhotoPairs(){return filterPhotos(project,photoRound,photoStatus,annotationRound);}
+function applyPhotoFilters(preserveView=false){
+  if(playback)return;
+  const scales=preserveView?(['original','retouch'] as Side[]).map(side=>{const r=canvas[side].getBoundingClientRect();return r.width&&r.height?fitScale(r.width,r.height,aspect())*(side==='original'?camera:rightCamera).zoom:undefined;}):[];
+  document.body.classList.remove('photos-hidden');
+  if(photoRound)for(const p of project.pairs){const v=roundVersion(p,photoRound);if(v)p.versionId=v.id;}
+  const photos=visiblePhotoPairs();
+  if(photoStatus!=='all'){
+    if(matchMedia('(min-width: 801px)').matches)document.body.classList.remove('sidebar-hidden');
+    filter=photoStatus==='pending'?'pending':'all';
+    document.querySelectorAll<HTMLElement>('[data-filter]').forEach(b=>b.classList.toggle('active',b.dataset.filter===filter));
+  }
+  if(photos.length){selectPair(photos.some(p=>p.id===pair?.id)?pair!.id:photos[0].id,preserveView);}
+  else{current();selectedId='';if(preserveView)void renderCanvas();else fit();persist();renderUI();}
+  if(preserveView){
+    // Opening the filmstrip changes the viewport size; retain the actual image scale too.
+    for(const [i,side] of (['original','retouch'] as Side[]).entries()){
+      const rect=canvas[side].getBoundingClientRect(),scale=scales[i];
+      if(scale&&rect.width&&rect.height){const zoom=scale/fitScale(rect.width,rect.height,aspect());if(side==='original')camera={...camera,zoom};else rightCamera={...rightCamera,zoom};}
+    }
+    void renderCanvas();capture(true);
+  }
+}
+$('#photo-round').addEventListener('change',e=>{if(playback)return;photoRound=Number((e.target as HTMLSelectElement).value);applyPhotoFilters(true);});
+$('#annotation-round').addEventListener('change',e=>{if(playback)return;annotationRound=Number((e.target as HTMLSelectElement).value);selectedId='';draft=undefined;drag=undefined;clickedMarker=undefined;renderUI();void renderCanvas();capture(true);});
+$('#photo-status').addEventListener('change',e=>{if(playback)return;photoStatus=(e.target as HTMLSelectElement).value as PhotoStatus;applyPhotoFilters();});
 function browsePhoto(direction:number){
   const photos=visiblePhotoPairs(),index=photos.findIndex(p=>p.id===pair?.id),next=photos[index<0?0:index+direction];
   if(next){selectPair(next.id);$('#pairs .selected')?.scrollIntoView({block:'nearest',inline:'nearest'});}
@@ -82,9 +124,16 @@ function renderUI(){
   $('#photo-title').textContent=o?.name||'每一处细节，都值得对照。';
   $('#count-label').textContent=pair?`${project.pairs.indexOf(pair)+1} / ${project.pairs.length} 组照片`:'本地工作台';
   const photos=visiblePhotoPairs(),photoIndex=photos.findIndex(p=>p.id===pair?.id);
-  $('#pair-count').textContent=annotatedPhotosOnly?`${photos.length} / ${project.pairs.length} · 仅有批注`:String(project.pairs.length);
+  $('#pair-count').textContent=photoRound||photoStatus!=='all'?`${photos.length} / ${project.pairs.length}`:String(project.pairs.length);
+  const rounds=Math.max(0,...project.pairs.map(p=>p.versions.length));
+  $('#photo-round').innerHTML='<option value="0">全部轮次（当前版本）</option>'+Array.from({length:rounds},(_,i)=>`<option value="${i+1}">V${i+1} · 第 ${i+1} 版</option>`).join('');
+  $('#annotation-round').innerHTML='<option value="0">跟随照片版本</option>'+Array.from({length:rounds},(_,i)=>`<option value="${i+1}">V${i+1} 批注</option>`).join('');
+  $<HTMLSelectElement>('#annotation-round').value=String(annotationRound);$<HTMLSelectElement>('#annotation-round').disabled=!!playback;
+  $<HTMLSelectElement>('#photo-round').value=String(photoRound);$<HTMLSelectElement>('#photo-status').value=photoStatus;
+  $<HTMLSelectElement>('#photo-round').disabled=!!playback;$<HTMLSelectElement>('#photo-status').disabled=!!playback;
+  $('#photo-filter-summary').textContent=`${photoRound?`V${photoRound}`:'当前版本'} · ${photos.length} 组${photoIndex<0&&pair?' · 当前画面不在筛选结果中':''}`;
   const annotatedButton=$<HTMLButtonElement>('[data-action="annotated-photos"]');
-  annotatedButton.classList.toggle('active',annotatedPhotosOnly);annotatedButton.setAttribute('aria-pressed',String(annotatedPhotosOnly));annotatedButton.disabled=!!playback;
+  annotatedButton.classList.toggle('active',photoStatus==='annotated');annotatedButton.setAttribute('aria-pressed',String(photoStatus==='annotated'));annotatedButton.disabled=!!playback;
   $<HTMLButtonElement>('[data-action="photo-prev"]').disabled=!!playback||photoIndex<=0;
   $<HTMLButtonElement>('[data-action="photo-next"]').disabled=!!playback||!photos.length||photoIndex===photos.length-1;
   $('#original-empty').hidden=!!o;$('#retouch-empty').hidden=!!r;
@@ -92,8 +141,8 @@ function renderUI(){
   $('#retouch-info').textContent=r?`${r.name} · ${r.width} × ${r.height}`:'等待配对修图';
   $('#version-select').innerHTML=pair?.versions.map(v=>`<option value="${v.id}" ${version?.id===v.id?'selected':''}>${esc(v.name)}${v.approved?' · 已通过':''}</option>`).join('')||'<option>未配对</option>';
   const list=$('#pairs');list.replaceChildren();
-  for(const p of photos){const a=asset(p.originalId)!,v=p.versions.find(v=>v.id===p.versionId),b=document.createElement('button');b.className=`photo-card ${p.id===pair?.id?'selected':''}`;b.dataset.pair=p.id;b.innerHTML=`<div class="thumbnail">${icon('image')}</div><span><strong>${esc(a.name)}</strong><small>${v?`${v.name} · ${v.approved?'已通过':`${v.annotations.length} 条意见`}`:'等待修图'}</small></span><em>${String(project.pairs.indexOf(p)+1).padStart(2,'0')}</em>`;list.append(b);if(a.preview){const img=document.createElement('img');img.src=a.preview;img.alt='';b.querySelector('.thumbnail')!.replaceChildren(img);}}
-  if(!photos.length)list.innerHTML=`<div class="filmstrip-empty">${annotatedPhotosOnly?'当前版本还没有批注，点击“有批注照片”可返回全部照片。':'导入照片后，在这里切换审阅。'}</div>`;
+  for(const p of photos){const a=asset(p.originalId)!,v=roundVersion(p,photoRound),b=document.createElement('button');b.className=`photo-card ${p.id===pair?.id?'selected':''}`;b.dataset.pair=p.id;b.innerHTML=`<div class="thumbnail">${icon('image')}</div><span><strong>${esc(a.name)}</strong><small>${v?`${v.name} · ${v.approved?'已通过':`${v.annotations.length} 条意见`}`:'等待修图'}</small></span><em>${String(project.pairs.indexOf(p)+1).padStart(2,'0')}</em>`;list.append(b);if(a.preview){const img=document.createElement('img');img.src=a.preview;img.alt='';b.querySelector('.thumbnail')!.replaceChildren(img);}}
+  if(!photos.length)list.innerHTML=`<div class="filmstrip-empty">${project.pairs.length?'没有符合条件的照片，请调整修图轮次或照片状态。':'导入照片后，在这里切换审阅。'}</div>`;
   renderNotes();
   const recordButton=$('[data-action="record"]');recordButton.classList.toggle('recording',!!recording);recordButton.innerHTML=icon('record')+(recording?'结束录制':'录制');
   $('#replay-summary').textContent=recording?(recordPaused?'录制已暂停':'正在录制审阅操作'):project.recordings.length?`${project.recordings.length} 段录制 · 可回看历史审阅`:'把每一条意见，讲清楚。';
@@ -102,10 +151,15 @@ function renderUI(){
   ($('[data-action="redo"]') as HTMLButtonElement).disabled=!redo.length||!!playback;
 }
 function renderNotes(){
-  const notes=version?.annotations||[];$('#note-count').textContent=String(notes.length);
-  $('#notes').innerHTML=notes.filter(a=>filter==='all'||(filter==='passed'?a.status==='已通过':a.status!=='已通过')).map(a=>`<article class="note ${a.id===selectedId?'selected':''}" data-note="${a.id}"><div class="note-top"><span class="note-number">${String(a.number).padStart(2,'0')}</span><span class="tag ${a.priority==='必须修改'?'urgent':''}">${esc(a.priority)}</span><span class="note-category">${esc(a.category)}</span></div><button class="note-text" data-focus="${a.id}">${esc(a.text)}</button>${a.needsPositionCheck?'<p class="warning">继承区域待检查定位</p>':''}<div class="note-bottom"><select data-status="${a.id}" aria-label="批注 ${a.number} 状态">${['待修改','待复核','已通过'].map(s=>`<option ${a.status===s?'selected':''}>${s}</option>`).join('')}</select><button data-edit="${a.id}">编辑 ${icon('chevron')}</button></div></article>`).join('')||`<div class="notes-empty"><div class="annotation-illustration"><span>01</span><svg viewBox="0 0 140 90"><path d="M20 55C10 5 120 0 122 43S35 88 20 55" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 5"/><path d="m95 60 16 18 2-9 10-3Z" fill="currentColor"/></svg></div><h3>${notes.length?'没有符合条件的意见':'从一个小细节开始'}</h3><p>在照片上圈出需要修改的位置，<br>或者添加一条整体意见。</p>${button('note','添加整体意见','plus','text-button')}</div>`;
-  const done=notes.filter(a=>a.status==='已通过').length;$('#review-progress').innerHTML=`<span>${version?.approved?'此版本已确认通过':`${done} / ${notes.length} 条意见已通过`}</span><div class="progress"><i style="width:${notes.length?done/notes.length*100:0}%"></i></div>`;
-  ($('[data-action="approve"]') as HTMLButtonElement).disabled=!version||notes.some(a=>a.status!=='已通过');
+  const notes=annotationVersion()?.annotations||[],readOnly=annotationsReadOnly();
+  $('#annotation-mode').textContent=annotationVersion()?`照片 ${version?.name||'未配对'} · 批注 ${annotationVersion()!.name}${readOnly?' · 只读：跨版本位置仅供参考':' · 可编辑'}`:`当前照片没有 V${annotationRound} 批注版本 · 只读`;
+  $('#annotation-mode').classList.toggle('readonly',readOnly);
+  document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach(b=>b.disabled=readOnly&&b.dataset.tool!=='hand');
+  if(readOnly&&tool!=='hand')setTool('hand');$('#note-count').textContent=String(notes.length);
+  $('#notes').innerHTML=notes.filter(a=>filter==='all'||(filter==='passed'?a.status==='已通过':a.status!=='已通过')).map(a=>`<article class="note ${a.id===selectedId?'selected':''}" data-note="${a.id}"><div class="note-top"><span class="note-number">${String(a.number).padStart(2,'0')}</span><span class="tag ${a.priority==='必须修改'?'urgent':''}">${esc(a.priority)}</span><span class="note-category">${esc(a.category)}</span></div><button class="note-text" data-focus="${a.id}">${esc(a.text)}</button>${a.needsPositionCheck?'<p class="warning">继承区域待检查定位</p>':''}<div class="note-bottom"><select ${readOnly?'disabled':''} data-status="${a.id}" aria-label="批注 ${a.number} 状态">${['待修改','待复核','已通过'].map(s=>`<option ${a.status===s?'selected':''}>${s}</option>`).join('')}</select><button ${readOnly?'disabled':''} data-edit="${a.id}">编辑 ${icon('chevron')}</button></div></article>`).join('')||`<div class="notes-empty"><div class="annotation-illustration"><span>01</span><svg viewBox="0 0 140 90"><path d="M20 55C10 5 120 0 122 43S35 88 20 55" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 5"/><path d="m95 60 16 18 2-9 10-3Z" fill="currentColor"/></svg></div><h3>${notes.length?'没有符合条件的意见':readOnly?'所选批注版本没有意见':'从一个小细节开始'}</h3><p>在照片上圈出需要修改的位置，<br>或者添加一条整体意见。</p>${button('note','添加整体意见','plus','text-button')}</div>`;
+  document.querySelectorAll<HTMLButtonElement>('[data-action="note"]').forEach(b=>b.disabled=readOnly);
+  const done=notes.filter(a=>a.status==='已通过').length;$('#review-progress').innerHTML=`<span>${annotationVersion()?.approved?'此批注版本已确认通过':`${done} / ${notes.length} 条意见已通过`}</span><div class="progress"><i style="width:${notes.length?done/notes.length*100:0}%"></i></div>`;
+  ($('[data-action="approve"]') as HTMLButtonElement).disabled=readOnly||!version||notes.some(a=>a.status!=='已通过');
 }
 let paintRequested=false;
 function renderCanvas(){
@@ -135,11 +189,67 @@ function openDialog(title:string,body:string,kind='generic'){
 }
 function closeDialog(){if(exporting)return;dialogCleanup?.();dialogCleanup=undefined;dialog.close();}
 dialog.addEventListener('cancel',e=>{e.preventDefault();closeDialog();});
+function previewRetouches(){
+  const images=project.pairs.flatMap(p=>{
+    const latest=p.versions.at(-1),image=asset(latest?.assetId);
+    return image?[image]:[];
+  });
+  openDialog('精修预览',images.length?`<div class="retouch-preview-gallery">${images.map((a,i)=>`<button type="button" class="retouch-preview-photo" data-preview-index="${i}" aria-label="查看第 ${i+1} 张：${esc(a.name)}"><img alt="${esc(a.name)}" ${a.preview?`src="${esc(a.preview)}"`:''} loading="lazy" draggable="false"></button>`).join('')}</div><div class="retouch-preview-detail" hidden><nav aria-label="精修预览导航"><button type="button" id="preview-back">返回总览</button><button type="button" id="preview-prev" aria-label="上一张" aria-keyshortcuts="ArrowLeft">&lt;</button><span id="preview-count" role="status"></span><button type="button" id="preview-next" aria-label="下一张" aria-keyshortcuts="ArrowRight">&gt;</button></nav><div class="retouch-preview-stage"><p id="preview-loading" role="status"></p><img id="preview-full-image" alt="" draggable="false" hidden></div></div>`:'<p class="retouch-preview-empty">还没有精修照片</p>','retouch-preview');
+  const close=$('.dialog-heading button');close.setAttribute('aria-label','关闭精修预览');
+  if(!images.length)return;
+  const gallery=$('.retouch-preview-gallery'),detail=$('.retouch-preview-detail');
+  const full=$<HTMLImageElement>('#preview-full-image'),loading=$('#preview-loading');
+  const previewGestures=bindPreviewGestures($('.retouch-preview-stage'),full,()=>inputMode);
+  const prev=$<HTMLButtonElement>('#preview-prev'),next=$<HTMLButtonElement>('#preview-next'),back=$('#preview-back');
+  let closed=false,index=-1,scroll=0,request=0,fullUrl='';
+  const urls:string[]=[];
+  function resetFull(){full.hidden=true;full.removeAttribute('src');if(fullUrl)URL.revokeObjectURL(fullUrl);fullUrl='';}
+  function showPhoto(i:number){
+    if(i<0||i>=images.length)return;
+    if(index<0){scroll=dialog.scrollTop;gallery.hidden=true;detail.hidden=false;dialog.scrollTop=0;back.focus();}
+    index=i;const ticket=++request,a=images[i];resetFull();
+    $('#preview-count').textContent=`${i+1} / ${images.length}`;
+    prev.disabled=i===0;next.disabled=i===images.length-1;
+    loading.hidden=false;loading.textContent='正在加载…';
+    const fail=()=>{if(!closed&&ticket===request){loading.textContent='无法加载这张精修照片';full.hidden=true;}};
+    void getBlob(a.id).then(blob=>{
+      if(closed||ticket!==request)return;
+      if(!blob){fail();return;}
+      full.alt=a.name;fullUrl=URL.createObjectURL(blob);full.src=fullUrl;
+      return full.decode().then(()=>{if(!closed&&ticket===request){full.hidden=false;loading.hidden=true;previewGestures.reset();}},fail);
+    }).catch(fail);
+  }
+  function showGallery(){
+    const tile=gallery.querySelector<HTMLElement>(`[data-preview-index="${index}"]`);
+    ++request;index=-1;resetFull();detail.hidden=true;gallery.hidden=false;tile?.focus({preventScroll:true});dialog.scrollTop=scroll;
+  }
+  back.onclick=showGallery;prev.onclick=()=>showPhoto(index-1);next.onclick=()=>showPhoto(index+1);
+  const keys=(e:KeyboardEvent)=>{
+    if(index<0||e.altKey||e.metaKey||e.ctrlKey)return;
+    if(e.key==='Escape'){e.preventDefault();showGallery();}
+    else if(e.key==='ArrowLeft'||e.key==='<'){e.preventDefault();showPhoto(index-1);}
+    else if(e.key==='ArrowRight'||e.key==='>'){e.preventDefault();showPhoto(index+1);}
+  };
+  dialog.addEventListener('keydown',keys);
+  const observer=new IntersectionObserver(entries=>{
+    for(const entry of entries){
+      if(!entry.isIntersecting)continue;
+      const tile=entry.target as HTMLButtonElement;observer.unobserve(tile);
+      const img=tile.querySelector('img')!,a=images[Number(tile.dataset.previewIndex)];
+      void getBlob(a.id).then(blob=>{if(!closed&&blob){const url=URL.createObjectURL(blob);urls.push(url);img.src=url;}}).catch(()=>{});
+    }
+  },{root:dialog,rootMargin:'160px'});
+  gallery.querySelectorAll<HTMLButtonElement>('.retouch-preview-photo').forEach(tile=>{
+    tile.onclick=()=>showPhoto(Number(tile.dataset.previewIndex));
+    if(!tile.querySelector('img')!.hasAttribute('src'))observer.observe(tile);
+  });
+  dialogCleanup=()=>{closed=true;observer.disconnect();dialog.removeEventListener('keydown',keys);previewGestures.dispose();resetFull();urls.forEach(url=>URL.revokeObjectURL(url));dialog.replaceChildren();};
+}
 function requireVersion(){if(!version){toast('请先导入原图，并配对一张修图。');return false;}return true;}
 function focusAnnotation(id:string){selectedId=id;const a=selected();if(!a)return;const r=asset(version!.assetId)!;camera=focusPoints(a.regions.flatMap(g=>regionWorldPoints(g,version!.alignment,aspect(),r.height/r.width)),aspect());rightCamera={...camera};synced=true;renderNotes();void renderCanvas();capture(true);}
 function draftSave(){if(!pending)return;const text=$('#note-text') as HTMLTextAreaElement|null;if(text)pending.text=text.value;try{localStorage.setItem(`retouch-draft-${project.id}`,JSON.stringify({pairId:pair?.id,versionId:version?.id,note:pending,isNew:pendingIsNew}));}catch{toast('草稿暂存失败，请尽快保存批注');}}
 function editNote(id?:string,region?:Region){
-  if(!requireVersion()||playback)return;
+  if(annotationsReadOnly()||!requireVersion()||playback)return;
   pendingIsNew=!id;pending=id?structuredClone(version!.annotations.find(a=>a.id===id)!):{id:uid(),number:version!.nextNumber,text:'',category:'其他',priority:'普通',status:'待修改',regions:region?[region]:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),duration:5};
   showNoteEditor();
 }
@@ -150,7 +260,7 @@ function showNoteEditor(){if(!pending)return;const n=pending;
   dialogCleanup=()=>{draft=undefined;void renderCanvas();};
 }
 function collectPending(){if(!pending)return;pending.text=($('#note-text') as HTMLTextAreaElement).value;pending.category=($('#note-category') as HTMLSelectElement).value;pending.priority=($('#note-priority') as HTMLSelectElement).value as Annotation['priority'];pending.duration=clamp(Number(($('#note-duration') as HTMLInputElement).value)||5,1,120);}
-function saveNote(){if(!pending||!version)return;collectPending();if(!pending.text.trim())return;remember();pending.text=pending.text.trim();pending.updatedAt=new Date().toISOString();const dx=Number(($<HTMLInputElement>('#region-x'))?.value||0),dy=Number(($<HTMLInputElement>('#region-y'))?.value||0),scale=clamp(Number(($<HTMLInputElement>('#region-scale'))?.value||1),.1,10);
+function saveNote(){if(annotationsReadOnly()||!pending||!version)return;collectPending();if(!pending.text.trim())return;remember();pending.text=pending.text.trim();pending.updatedAt=new Date().toISOString();const dx=Number(($<HTMLInputElement>('#region-x'))?.value||0),dy=Number(($<HTMLInputElement>('#region-y'))?.value||0),scale=clamp(Number(($<HTMLInputElement>('#region-scale'))?.value||1),.1,10);
   for(const region of pending.regions){const center={x:region.points.reduce((s,p)=>s+p.x,0)/region.points.length,y:region.points.reduce((s,p)=>s+p.y,0)/region.points.length};region.points=region.points.map(p=>({x:center.x+(p.x-center.x)*scale+dx,y:center.y+(p.y-center.y)*scale+dy}));}
   pending.needsPositionCheck=false;if(pendingIsNew){version.annotations.push(pending);version.nextNumber++;}else version.annotations[version.annotations.findIndex(a=>a.id===pending!.id)]=pending;
   version.approved=false;selectedId=pending.id;pending=undefined;localStorage.removeItem(`retouch-draft-${project.id}`);closeDialog();changed();
@@ -186,7 +296,7 @@ for(const side of ['original','retouch'] as Side[]){const c=canvas[side];
   });
   c.addEventListener('pointerdown',e=>{if(!version||playback||e.button!==0)return;activeSide=side;const rect=c.getBoundingClientRect(),pos={x:e.clientX-rect.left,y:e.clientY-rect.top};drag={side,start:pos,camera:{...(side==='original'?camera:rightCamera)}};c.setPointerCapture(e.pointerId);
     const hit=!space&&!addingRegion?markerAt(side,pos):undefined;if(hit){clickedMarker={id:hit,pointerId:e.pointerId,side,start:pos,camera:{...drag.camera},moved:false};drag=undefined;return;}
-    if(tool!=='hand'&&!space){const world=screenToWorld(pos,drag.camera,rect.width,rect.height,aspect()),r=asset(version.assetId)!,point=side==='original'?world:fromWorld(world,version.alignment,aspect(),r.height/r.width);if(point.x<0||point.x>1||point.y<0||point.y>(side==='original'?aspect():r.height/r.width)){drag=undefined;return;}
+    if(tool!=='hand'&&!space){if(annotationsReadOnly()){drag=undefined;return;}const world=screenToWorld(pos,drag.camera,rect.width,rect.height,aspect()),r=asset(version.assetId)!,point=side==='original'?world:fromWorld(world,version.alignment,aspect(),r.height/r.width);if(point.x<0||point.x>1||point.y<0||point.y>(side==='original'?aspect():r.height/r.width)){drag=undefined;return;}
       draft={kind:tool,side,points:[point]};drag.region=draft;void renderCanvas();capture(true);}
   });
   c.addEventListener('pointermove',e=>{
@@ -204,7 +314,7 @@ for(const side of ['original','retouch'] as Side[]){const c=canvas[side];
 function chooseFiles(mode:typeof importMode){if(playback||recording){toast('请先结束回放或录制再导入照片');return;}importMode=mode;const input=$('#file-input') as HTMLInputElement;input.value='';input.multiple=mode!=='version';input.click();}
 $('#file-input').addEventListener('change',e=>void importFiles([...((e.target as HTMLInputElement).files||[])]));
 async function importFiles(files:File[]){if(!files.length)return;const imported:Asset[]=[],failures:string[]=[];toast(`正在导入 ${files.length} 张照片…`);for(const f of files){try{imported.push(await importImage(f));}catch(e){failures.push(e instanceof Error?e.message:String(e));}}
-  if(!imported.length){toast(failures.join('；'));return;}if(importMode==='original'){remember();project.assets.push(...imported);for(const a of imported)project.pairs.push({id:uid(),originalId:a.id,versions:[],versionId:''});project.selectedPairId=project.pairs.at(-imported.length)!.id;current();fit();changed();}
+  if(!imported.length){toast(failures.join('；'));return;}photoRound=0;photoStatus='all';if(importMode==='original'){remember();project.assets.push(...imported);for(const a of imported)project.pairs.push({id:uid(),originalId:a.id,versions:[],versionId:''});project.selectedPairId=project.pairs.at(-imported.length)!.id;current();fit();changed();}
   else if(importMode==='version'&&pair){remember();project.assets.push(...imported);for(const a of imported)addVersion(pair,a);changed();fit();}
   else showPairing(imported);
   toast(failures.length?`已导入 ${imported.length} 张；${failures.join('；')}`:`已读取 ${imported.length} 张照片${importMode==='retouch'?'，请确认配对':''}`);
@@ -279,21 +389,12 @@ const actions:Record<string,()=>void>={
   marks:()=>{showMarks=!showMarks;renderUI();void renderCanvas();capture(true);},
   undo:()=>{if(!undo.length)return;redo.push(snapshot());project=undo.pop()!;changed();},redo:()=>{if(!redo.length)return;undo.push(snapshot());project=redo.pop()!;changed();},
   'close-dialog':closeDialog,'cancel-note':()=>{pending=undefined;localStorage.removeItem(`retouch-draft-${project.id}`);closeDialog();},
-  'delete-note':()=>{if(!pending||!version)return;remember();version.annotations=version.annotations.filter(a=>a.id!==pending!.id);pending=undefined;selectedId='';localStorage.removeItem(`retouch-draft-${project.id}`);closeDialog();changed();},
+  'delete-note':()=>{if(annotationsReadOnly()||!pending||!version)return;remember();version.annotations=version.annotations.filter(a=>a.id!==pending!.id);pending=undefined;selectedId='';localStorage.removeItem(`retouch-draft-${project.id}`);closeDialog();changed();},
   'add-region':()=>{collectPending();draftSave();closeDialog();addingRegion=true;oppositeRegion=false;setTool('ellipse');toast('请在画布圈出补充区域，完成后继续编辑意见。');},
   opposite:()=>{collectPending();draftSave();closeDialog();addingRegion=true;oppositeRegion=true;setTool(pending!.regions[0].kind);toast(`请在${pending!.regions[0].side==='original'?'修图':'原图'}画布指定对应位置。`);},
-  approve:()=>{if(!version||version.annotations.some(a=>a.status!=='已通过'))return;remember();version.approved=true;changed();},
+  approve:()=>{if(annotationsReadOnly()||!version||version.annotations.some(a=>a.status!=='已通过'))return;remember();version.approved=true;changed();},
   'toggle-sidebar':()=>{document.body.classList.toggle('sidebar-hidden');},
-  'annotated-photos':()=>{
-    annotatedPhotosOnly=!annotatedPhotosOnly;document.body.classList.remove('photos-hidden');
-    const photos=visiblePhotoPairs();
-    if(annotatedPhotosOnly&&photos.length){
-      if(matchMedia('(min-width: 801px)').matches)document.body.classList.remove('sidebar-hidden');filter='all';
-      document.querySelectorAll<HTMLElement>('[data-filter]').forEach(b=>b.classList.toggle('active',b.dataset.filter==='all'));
-      if(!photos.some(p=>p.id===pair?.id)){selectPair(photos[0].id);return;}
-    }
-    renderUI();
-  },
+  'annotated-photos':()=>{photoStatus=photoStatus==='annotated'?'all':'annotated';applyPhotoFilters();},
   'photo-prev':()=>browsePhoto(-1),'photo-next':()=>browsePhoto(1),
   'toggle-photos':()=>{document.body.classList.toggle('photos-hidden');},
   replay:replayDialog,
@@ -303,12 +404,13 @@ const actions:Record<string,()=>void>={
   play:()=>{if(!playback)return;playing=!playing;lastFrame=0;if(playing){if(playTime>=playback.duration)seek(0);requestAnimationFrame(playTick);}updatePlayButton();},
   stop:stopPlayback,prev:()=>{if(!playback)return;seek([...playback.chapters].reverse().find(c=>c.time<playTime-100)?.time||0);},next:()=>{if(!playback)return;seek(playback.chapters.find(c=>c.time>playTime+100)?.time||playback.duration);},
   fullscreen:()=>{if(document.fullscreenElement)void document.exitFullscreen();else void document.documentElement.requestFullscreen().catch(error);},
+  'preview-retouches':previewRetouches,
   export:exportDialog,
   help:()=>openDialog('使用帮助',`<div class="help-list"><p><kbd>H</kbd>平移 <kbd>P</kbd>点标记 <kbd>R</kbd>矩形 <kbd>O</kbd>椭圆 <kbd>B</kbd>自由圈画</p><p><kbd>空格 + 拖动</kbd>临时平移 · 触控板双指滑动平移，捏合缩放。鼠标可切换工具栏“鼠标”模式，用滚轮缩放</p><p><kbd>⌘ / Ctrl + Z</kbd>撤销 <kbd>⇧ + ⌘ / Ctrl + Z</kbd>重做</p><p>在任意一侧画出区域，然后填写修改说明。点击意见可自动定位。</p><p>若两张照片裁切不同，先点击“对齐”。局部变形可在意见编辑器指定另一侧位置。</p><p>“批注讲解”自动生成回放；“录制”保存主动审阅过程。导出 HTML 可离线播放。</p><p>照片保存在当前浏览器，清理浏览器数据会删除它们。请定期导出可编辑项目包。</p></div>`),
 };
 document.addEventListener('click',e=>{
   const target=(e.target as Element).closest<HTMLElement>('button,[data-focus]');if(!target)return;
-  const allowedDuringPlayback=['play','stop','prev','next','fullscreen','help','toggle-sidebar','toggle-photos','export','close-dialog'];
+  const allowedDuringPlayback=['play','stop','prev','next','fullscreen','help','toggle-sidebar','toggle-photos','preview-retouches','export','close-dialog'];
   const action=target.dataset.action;
   if(playback&&((action&&!allowedDuringPlayback.includes(action))||target.dataset.tool||target.dataset.edit||target.dataset.pair)){toast('回放为只读，点击关闭回放后继续编辑。');return;}
   if(recording&&action&&['projects','new-project','open-package'].includes(action)){toast('请先保存并结束录制');return;}
@@ -323,8 +425,8 @@ document.addEventListener('click',e=>{
   if(target.dataset.recording){const skip=$<HTMLInputElement>('#skip-idle').checked,r=project.recordings.find(r=>r.id===target.dataset.recording)!;closeDialog();startPlayback(recordingPlayback(r,skip));}
   if(target.dataset.export)void runExport(target.dataset.export);
 });
-document.addEventListener('change',e=>{const t=e.target as HTMLSelectElement;if(t.dataset.status&&version){if(playback){renderNotes();return;}remember();version.annotations.find(a=>a.id===t.dataset.status)!.status=t.value as Annotation['status'];version.approved=false;changed();}});
-$('#version-select').addEventListener('change',e=>{if(!pair||playback){renderUI();return;}pair.versionId=(e.target as HTMLSelectElement).value;current();selectedId='';fit();persist();renderUI();if(version&&pair.versions.length>1&&!version.annotations.length){const old=pair.versions[pair.versions.indexOf(version)-1];if(old?.annotations.some(a=>a.status!=='已通过')){openDialog('复核新版本',`<p class="dialog-intro">是否将上一版本未通过的意见复制到此版本？复制的区域将标记为待检查定位。</p><div class="dialog-actions">${button('close-dialog','暂不复制')}<button id="copy-notes" class="primary">复制待处理意见</button></div>`);$('#copy-notes').onclick=()=>{remember();for(const a of old.annotations.filter(a=>a.status!=='已通过')){version!.annotations.push({...structuredClone(a),id:uid(),number:version!.nextNumber++,sourceId:a.id,status:'待复核',needsPositionCheck:true});}closeDialog();changed();};}}});
+document.addEventListener('change',e=>{const t=e.target as HTMLSelectElement;if(t.dataset.status&&version){if(playback||annotationsReadOnly()){renderNotes();return;}remember();version.annotations.find(a=>a.id===t.dataset.status)!.status=t.value as Annotation['status'];version.approved=false;changed();}});
+$('#version-select').addEventListener('change',e=>{if(!pair||playback){renderUI();return;}photoRound=0;pair.versionId=(e.target as HTMLSelectElement).value;current();selectedId='';draft=undefined;void renderCanvas();persist();renderUI();if(!annotationsReadOnly()&&version&&pair.versions.length>1&&!version.annotations.length){const old=pair.versions[pair.versions.indexOf(version)-1];if(old?.annotations.some(a=>a.status!=='已通过')){openDialog('复核新版本',`<p class="dialog-intro">是否将上一版本未通过的意见复制到此版本？复制的区域将标记为待检查定位。</p><div class="dialog-actions">${button('close-dialog','暂不复制')}<button id="copy-notes" class="primary">复制待处理意见</button></div>`);$('#copy-notes').onclick=()=>{if(annotationsReadOnly())return;remember();for(const a of old.annotations.filter(a=>a.status!=='已通过')){version!.annotations.push({...structuredClone(a),id:uid(),number:version!.nextNumber++,sourceId:a.id,status:'待复核',needsPositionCheck:true});}closeDialog();changed();};}}});
 $('#seek').addEventListener('input',e=>{if(playback)seek(Number((e.target as HTMLInputElement).value)/1000*playback.duration);});$('#speed').addEventListener('change',e=>{speed=Number((e.target as HTMLSelectElement).value);});
 $('#package-input').addEventListener('change',async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;try{toast('正在校验并恢复项目…');project=await importPackage(f);undo=[];redo=[];closeDialog();current();fit();renderUI();toast('项目已恢复。');}catch(e){error(e);}});
 document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes((e.target as Element).tagName)||dialog.open)return;if(e.code==='Space'){e.preventDefault();space=true;}if(playback)return;const tools:Record<string,Tool>={h:'hand',p:'point',r:'rect',o:'ellipse',b:'pen'};if(tools[e.key.toLowerCase()]&&!e.metaKey&&!e.ctrlKey)setTool(tools[e.key.toLowerCase()]);if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'){e.preventDefault();actions[e.shiftKey?'redo':'undo']();}});document.addEventListener('keyup',e=>{if(e.code==='Space')space=false;});window.addEventListener('blur',()=>{space=false;});
